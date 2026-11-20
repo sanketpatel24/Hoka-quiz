@@ -81,7 +81,7 @@ vercel env add EARLY_ACCESS_CUSTOMER_METAFIELD production
 vercel --prod
 ```
 
-On Cloudflare Workers (`worker.js`, `wrangler.jsonc`), set each one with `npx wrangler secret put <NAME>` or in the dashboard under the worker's Settings > Variables and Secrets.
+On Cloudflare Workers (`worker.js`, `wrangler.jsonc`), the four non-secret variables live under `vars` in `wrangler.jsonc`, so every deploy carries them. Add `SHOPIFY_API_KEY` and `SHOPIFY_API_SECRET` as secrets, with `npx wrangler secret put <NAME>` or in the dashboard under the worker's Settings > Variables and Secrets with type Secret. Secrets survive deploys; a plain Text variable added in the dashboard is deleted by the next deploy from `wrangler.jsonc`.
 
 Redeploy after changing any variable. Then put `https://<deployment>/api/early-access` into the theme under Theme settings > Early access > Early Access API endpoint.
 
@@ -240,7 +240,7 @@ If it is, turn on Storefronts access for `Early Access submission` in Settings >
 - The request cannot choose which entry gets updated: the entry handle is built from the customer ID.
 - Screenshot uploads are limited to PNG and JPG up to 2 MB, checked by file signature.
 - Metaobject entries are not readable from the storefront (storefront access `NONE`).
-- Errors returned to the browser are short and generic. Shopify responses and stack traces go to the Vercel function logs only.
+- Errors returned to the browser are short and generic. Shopify responses and stack traces go to the function logs only (Vercel or Cloudflare Workers).
 - No secret value is ever rendered, returned or logged. `/api/test` reports `set`, `missing` or `invalid`.
 
 ## Development

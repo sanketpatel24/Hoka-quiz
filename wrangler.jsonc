@@ -2,5 +2,11 @@
   "name": "hoka-india-quiz",
   "main": "worker.js",
   "compatibility_date": "2026-11-01",
-  "compatibility_flags": ["nodejs_compat"]
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": {
+    "SHOPIFY_STORE_DOMAIN": "hoka-india.myshopify.com",
+    "SHOPIFY_STOREFRONT_ORIGIN": "https://in.hoka.com",
+    "EARLY_ACCESS_METAOBJECT_TYPE": "early_access_submission",
+    "EARLY_ACCESS_CUSTOMER_METAFIELD": "early_access.submission"
+  }
 }
