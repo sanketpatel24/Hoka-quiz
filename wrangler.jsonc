@@ -1,5 +1,5 @@
 {
-  "name": "hoka-india-quiz",
+  "name": "hoca-quiz",
   "main": "worker.js",
   "compatibility_date": "2026-11-01",
   "compatibility_flags": ["nodejs_compat"],
