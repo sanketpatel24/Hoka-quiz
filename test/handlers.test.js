@@ -4,9 +4,8 @@ import earlyAccess from '../api/early-access.js';
 import health from '../api/health.js';
 import index from '../api/index.js';
 import configTest from '../api/test.js';
-import { clearTokenCache } from '../lib/shopify.js';
 import {
-  API_SECRET,
+  ADMIN_TOKEN,
   API_URL,
   CUSTOMER_ID,
   ENTRY_ID,
@@ -22,7 +21,6 @@ let shopify;
 
 beforeEach(() => {
   setEnv();
-  clearTokenCache();
   shopify = stubShopify();
 });
 
@@ -153,7 +151,7 @@ test('answers 503 when the customer metafield is not namespace.key', async () =>
 });
 
 test('answers 503 when the deployment is missing its secret', async () => {
-  delete process.env.SHOPIFY_API_SECRET;
+  delete process.env.SHOPIFY_ADMIN_TOKEN;
   const response = await post(validForm());
   assert.equal(response.status, 503);
   assert.equal(shopify.calls.length, 0);
@@ -257,13 +255,13 @@ test('health answers 200 with every secret missing', async () => {
 });
 
 test('config test answers 503 and names the missing variables without values', async () => {
-  delete process.env.SHOPIFY_API_KEY;
+  delete process.env.SHOPIFY_ADMIN_TOKEN;
   const response = await configTest.fetch(new Request('https://metafields-api.test/api/test'));
   const text = await response.text();
 
   assert.equal(response.status, 503);
-  assert.match(text, /"name":"SHOPIFY_API_KEY"[^}]*"status":"missing"/);
-  assert.equal(text.includes(API_SECRET), false);
+  assert.match(text, /"name":"SHOPIFY_ADMIN_TOKEN"[^}]*"status":"missing"/);
+  assert.equal(text.includes(ADMIN_TOKEN), false);
 });
 
 test('config test reports an invalid storefront origin without calling Shopify', async () => {
@@ -278,10 +276,8 @@ test('config test reports an invalid storefront origin without calling Shopify',
 
 test('config test answers 200 when Shopify grants the required scopes', async () => {
   shopify.restore();
-  globalThis.fetch = async (url) =>
-    String(url).endsWith('/access_token')
-      ? Response.json({ access_token: 'shpat_test', expires_in: 86399 })
-      : Response.json({
+  globalThis.fetch = async () =>
+    Response.json({
           data: {
             shop: { myshopifyDomain: 'early-access-test.myshopify.com' },
             currentAppInstallation: {
@@ -297,10 +293,8 @@ test('config test answers 200 when Shopify grants the required scopes', async ()
 
 test('config test answers 503 when the app cannot write metaobjects', async () => {
   shopify.restore();
-  globalThis.fetch = async (url) =>
-    String(url).endsWith('/access_token')
-      ? Response.json({ access_token: 'shpat_test', expires_in: 86399 })
-      : Response.json({
+  globalThis.fetch = async () =>
+    Response.json({
           data: {
             shop: { myshopifyDomain: 'early-access-test.myshopify.com' },
             currentAppInstallation: {
@@ -326,13 +320,12 @@ test('index lists every endpoint and env name but never a value', async () => {
     '/api/health',
     'SHOPIFY_STORE_DOMAIN',
     'SHOPIFY_STOREFRONT_ORIGIN',
-    'SHOPIFY_API_KEY',
-    'SHOPIFY_API_SECRET',
+    'SHOPIFY_ADMIN_TOKEN',
     'EARLY_ACCESS_METAOBJECT_TYPE',
     'EARLY_ACCESS_CUSTOMER_METAFIELD',
   ];
   for (const expected of expectedNames) {
     assert.ok(html.includes(expected), `index is missing ${expected}`);
   }
-  assert.equal(html.includes(API_SECRET), false);
+  assert.equal(html.includes(ADMIN_TOKEN), false);
 });

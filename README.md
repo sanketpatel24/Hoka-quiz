@@ -34,7 +34,7 @@ Why upsert: each customer has exactly one entry, found by its handle `customer-<
 
 ### 1. Create the Shopify app
 
-In the Shopify Dev Dashboard of the organization that owns the store, create an app and release a version with:
+In Shopify admin, open Settings > Apps and sales channels > Develop apps, create a custom app and give it:
 
 - Access scopes:
 
@@ -46,19 +46,10 @@ In the Shopify Dev Dashboard of the organization that owns the store, create an 
   | `write_metaobject_definitions` | Only for `npm run definitions` in step 3. Can be removed after setup. |
 
   Each write scope includes its read scope. No other scope is needed.
-- Protected customer data: if a submission fails with "This app is not approved to access the Customer object" in the function logs, request protected customer data access for the app in the Dev Dashboard. Level 1 is enough: the API reads no name, email, phone or address.
+- Protected customer data: if a submission fails with "This app is not approved to access the Customer object" in the function logs, request protected customer data access for the app. Level 1 is enough: the API reads no name, email, phone or address.
 - No app proxy. If one was set up for `/apps/early-access` earlier, it is no longer used and can be removed.
 
-If the app is managed with Shopify CLI, the same scopes in `shopify.app.toml` are:
-
-```toml
-[access_scopes]
-scopes = "write_customers,write_files,write_metaobjects,write_metaobject_definitions"
-```
-
-Install the app on the store. Copy the app's Client ID and Client secret.
-
-The API gets Admin API tokens with the client credentials grant, which only works when the app and the store belong to the same Dev Dashboard organization. Tokens last 24 hours and the API requests a new one before expiry.
+Install the app on the store, then copy its Admin API access token (`shpat_...`) into `SHOPIFY_ADMIN_TOKEN`. Shopify shows it once; the API sends it as-is on every request, so it does not expire.
 
 ### 2. Environment variables
 
@@ -74,25 +65,23 @@ On Vercel:
 vercel link
 vercel env add SHOPIFY_STORE_DOMAIN production
 vercel env add SHOPIFY_STOREFRONT_ORIGIN production
-vercel env add SHOPIFY_API_KEY production
-vercel env add SHOPIFY_API_SECRET production
+vercel env add SHOPIFY_ADMIN_TOKEN production
 vercel env add EARLY_ACCESS_METAOBJECT_TYPE production
 vercel env add EARLY_ACCESS_CUSTOMER_METAFIELD production
 vercel --prod
 ```
 
-On Cloudflare Workers (`worker.js`, `wrangler.jsonc`), the four non-secret variables live under `vars` in `wrangler.jsonc`, so every deploy carries them. Add `SHOPIFY_API_KEY` and `SHOPIFY_API_SECRET` as secrets, with `npx wrangler secret put <NAME>` or in the dashboard under the worker's Settings > Variables and Secrets with type Secret. Secrets survive deploys; a plain Text variable added in the dashboard is deleted by the next deploy from `wrangler.jsonc`.
+On Cloudflare Workers (`worker.js`, `wrangler.jsonc`), the four non-secret variables live under `vars` in `wrangler.jsonc`, so every deploy carries them. Add `SHOPIFY_ADMIN_TOKEN` as a secret, with `npx wrangler secret put <NAME>` or in the dashboard under the worker's Settings > Variables and Secrets with type Secret. Secrets survive deploys; a plain Text variable added in the dashboard is deleted by the next deploy from `wrangler.jsonc`.
 
 Redeploy after changing any variable. Then put `https://<deployment>/api/early-access` into the theme under Theme settings > Early access > Early Access API endpoint.
 
-All six are required. A missing or malformed value makes the write endpoint answer `503` and `/api/test` name the variable.
+All five are required. A missing or malformed value makes the write endpoint answer `503` and `/api/test` name the variable.
 
 | Variable | Example | Purpose |
 | --- | --- | --- |
 | `SHOPIFY_STORE_DOMAIN` | `store-name.myshopify.com` | The store the API writes to. Its `https` origin may always call the API. |
 | `SHOPIFY_STOREFRONT_ORIGIN` | `https://www.example.com` | Storefront origin the popup calls the API from; a bare host means `https`. Comma-separate several. Only these origins get CORS access; a request with any other `Origin`, or none, is refused with `403`. `https://<SHOPIFY_STORE_DOMAIN>` is always allowed. |
-| `SHOPIFY_API_KEY` | 32 letters and digits | App Client ID, used to request Admin API tokens. Not an `shpat_` or `shpca_` access token. |
-| `SHOPIFY_API_SECRET` | `shpss_...` | App Client secret, used with the Client ID to request Admin API tokens. Secret. |
+| `SHOPIFY_ADMIN_TOKEN` | `shpat_...` | Admin API access token of the custom app installed on the store. Secret. |
 | `EARLY_ACCESS_METAOBJECT_TYPE` | `early_access_submission` | Metaobject type that holds the answers. |
 | `EARLY_ACCESS_CUSTOMER_METAFIELD` | `early_access.submission` | Customer metafield, as `namespace.key`, that points to the entry. |
 

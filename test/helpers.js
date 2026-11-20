@@ -1,6 +1,5 @@
 export const STORE_DOMAIN = 'early-access-test.myshopify.com';
-export const API_SECRET = 'test-secret-value-never-rendered';
-export const API_KEY = 'test-client-id';
+export const ADMIN_TOKEN = 'shpat_test-token-never-rendered';
 export const CUSTOMER_ID = '7712345678901';
 export const ENTRY_ID = 'gid://shopify/Metaobject/777';
 export const STOREFRONT_ORIGIN = 'https://www.early-access-test.example';
@@ -9,8 +8,7 @@ export const API_URL = 'https://metafields-api.test/api/early-access';
 const TEST_ENV = {
   SHOPIFY_STORE_DOMAIN: STORE_DOMAIN,
   SHOPIFY_STOREFRONT_ORIGIN: `${STOREFRONT_ORIGIN}, early-access-test.example`,
-  SHOPIFY_API_KEY: API_KEY,
-  SHOPIFY_API_SECRET: API_SECRET,
+  SHOPIFY_ADMIN_TOKEN: ADMIN_TOKEN,
   EARLY_ACCESS_METAOBJECT_TYPE: 'early_access_submission',
   EARLY_ACCESS_CUSTOMER_METAFIELD: 'early_access.submission',
 };
@@ -47,10 +45,6 @@ export function stubShopify({ knownCustomer = true } = {}) {
   globalThis.fetch = async (url, init = {}) => {
     const target = String(url);
     calls.push({ url: target, init });
-
-    if (target.endsWith('/admin/oauth/access_token')) {
-      return Response.json({ access_token: 'shpat_test', expires_in: 86399, scope: 'write_customers,write_files' });
-    }
 
     if (target === 'https://uploads.test/upload') return new Response(null, { status: 204 });
 

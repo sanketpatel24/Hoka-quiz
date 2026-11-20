@@ -7,6 +7,7 @@
     "node": "24.x"
   },
   "scripts": {
+    "dev": "npx wrangler dev --env-file .env.local",
     "test": "node --test test/*.test.js",
     "check": "node --check worker.js api/*.js lib/*.js scripts/*.js",
     "definitions": "node --env-file=.env.local scripts/create-definitions.js"
