@@ -1,22 +1,20 @@
 # Early Access metafields API
 
-Saves the answers a logged-in customer gives in the storefront Early Access quiz popup (the five Figma screens: weekly distance and run screenshot, running surfaces, running goal, shoe size, then the "You're on the list" pass). When the shopper presses Continue on question 4, the popup posts every answer once. The API creates a metaobject entry holding all of them (type `early_access_submission`) and sets that entry on the customer's `early_access.submission` metafield. Both names come from environment variables.
+Saves the answers a signed-in customer gives in the storefront Early Access quiz popup (the five Figma screens: weekly distance and run screenshot, running surfaces, running goal, shoe size, then the "You're on the list" pass). When the shopper presses Continue on question 4, the popup posts every answer once. The API creates a metaobject entry holding all of them (type `early_access_submission`) and sets that entry on the customer's `early_access.submission` metafield. Both names come from environment variables.
 
 ## How it works
 
 ```
 Storefront popup (theme), Continue on question 4
-  POST /apps/early-access            multipart form, same origin as the store
+  POST https://<deployment>/api/early-access
+       multipart form: customerId (from KwikPass) + every answer
         |
         v
-Shopify app proxy                    adds shop, logged_in_customer_id, timestamp
-        |                            and an HMAC signature made with the app secret
-        v
-Vercel  POST /api/early-access
-  1. verify the signature, the shop and the timestamp
-  2. refuse a browser Origin that is not the storefront
-  3. refuse logged-out shoppers (logged_in_customer_id is empty)
-  4. validate the answers and the screenshot
+Worker  POST /api/early-access
+  1. refuse a browser Origin that is not in SHOPIFY_STOREFRONT_ORIGIN (CORS)
+  2. refuse a missing or malformed customerId (401 not_logged_in)
+  3. validate the answers and the screenshot
+  4. customer(id): refuse an ID that is not a customer of the store
   5. screenshot -> stagedUploadsCreate -> upload -> fileCreate (Shopify Files)
   6. metaobjectUpsert: entry of type EARLY_ACCESS_METAOBJECT_TYPE,
      handle customer-<id>, with every answer
@@ -26,7 +24,9 @@ Vercel  POST /api/early-access
 JSON back to the popup: pass number, saved answers
 ```
 
-Why an app proxy: the theme cannot create metaobjects or write customer metafields itself. Liquid customer forms have no metafield fields, and the Storefront API cannot write either. Writing needs the Admin API, and the Admin API token must never reach the browser. The app proxy keeps the call on the store's own domain and tells the API which customer is logged in, signed by Shopify, so the API never trusts a customer ID sent by the browser.
+Why an API at all: the theme cannot create metaobjects or write customer metafields itself. Liquid customer forms have no metafield fields, and the Storefront API cannot write either. Writing needs the Admin API, and the Admin API token must never reach the browser.
+
+Why a direct call and not a Shopify app proxy: the store signs customers in with KwikPass, which never starts a Shopify customer session. An app proxy would always forward an empty `logged_in_customer_id`, so every submission would be refused as logged out, and on a password-protected store the proxy redirects to `/password` anyway. The popup therefore calls the API the same way the Notify Me button calls the commerce backend's `/launch/notify`: straight to the worker URL with the KwikPass customer ID in the body. See [Security](#security) for what that trusts.
 
 Why upsert: each customer has exactly one entry, found by its handle `customer-<id>`. The first submission creates it; a later one updates it in place, so a customer who retakes the quiz never leaves a stray entry behind. If linking fails after the entry was saved, sending the quiz again finishes the job without a duplicate.
 
@@ -47,18 +47,13 @@ In the Shopify Dev Dashboard of the organization that owns the store, create an 
 
   Each write scope includes its read scope. No other scope is needed.
 - Protected customer data: if a submission fails with "This app is not approved to access the Customer object" in the function logs, request protected customer data access for the app in the Dev Dashboard. Level 1 is enough: the API reads no name, email, phone or address.
-- App proxy: prefix `apps`, subpath `early-access`, proxy URL `https://<deployment>/api/early-access`
+- No app proxy. If one was set up for `/apps/early-access` earlier, it is no longer used and can be removed.
 
-If the app is managed with Shopify CLI, the same settings in `shopify.app.toml` are:
+If the app is managed with Shopify CLI, the same scopes in `shopify.app.toml` are:
 
 ```toml
 [access_scopes]
 scopes = "write_customers,write_files,write_metaobjects,write_metaobject_definitions"
-
-[app_proxy]
-url = "https://<deployment>/api/early-access"
-prefix = "apps"
-subpath = "early-access"
 ```
 
 Install the app on the store. Copy the app's Client ID and Client secret.
@@ -86,16 +81,18 @@ vercel env add EARLY_ACCESS_CUSTOMER_METAFIELD production
 vercel --prod
 ```
 
-Redeploy after changing any variable. Then put the deployment URL into the app proxy setting from step 1.
+On Cloudflare Workers (`worker.js`, `wrangler.jsonc`), set each one with `npx wrangler secret put <NAME>` or in the dashboard under the worker's Settings > Variables and Secrets.
+
+Redeploy after changing any variable. Then put `https://<deployment>/api/early-access` into the theme under Theme settings > Early access > Early Access API endpoint.
 
 All six are required. A missing or malformed value makes the write endpoint answer `503` and `/api/test` name the variable.
 
 | Variable | Example | Purpose |
 | --- | --- | --- |
-| `SHOPIFY_STORE_DOMAIN` | `store-name.myshopify.com` | The store. Proxy requests from any other shop are refused. |
-| `SHOPIFY_STOREFRONT_ORIGIN` | `https://www.example.com` | Public storefront origin the popup runs on; a bare host means `https`. Comma-separate several. A request whose browser `Origin` is another site is refused with `403`. `https://<SHOPIFY_STORE_DOMAIN>` is always allowed. |
+| `SHOPIFY_STORE_DOMAIN` | `store-name.myshopify.com` | The store the API writes to. Its `https` origin may always call the API. |
+| `SHOPIFY_STOREFRONT_ORIGIN` | `https://www.example.com` | Storefront origin the popup calls the API from; a bare host means `https`. Comma-separate several. Only these origins get CORS access; a request with any other `Origin`, or none, is refused with `403`. `https://<SHOPIFY_STORE_DOMAIN>` is always allowed. |
 | `SHOPIFY_API_KEY` | 32 letters and digits | App Client ID, used to request Admin API tokens. Not an `shpat_` or `shpca_` access token. |
-| `SHOPIFY_API_SECRET` | `shpss_...` | App Client secret. Verifies the app proxy signature and requests Admin API tokens. Secret. |
+| `SHOPIFY_API_SECRET` | `shpss_...` | App Client secret, used with the Client ID to request Admin API tokens. Secret. |
 | `EARLY_ACCESS_METAOBJECT_TYPE` | `early_access_submission` | Metaobject type that holds the answers. |
 | `EARLY_ACCESS_CUSTOMER_METAFIELD` | `early_access.submission` | Customer metafield, as `namespace.key`, that points to the entry. |
 
@@ -153,14 +150,15 @@ The metaobject type and the metafield namespace and key come from the environmen
 
 ## Storefront contract
 
-Show the popup only to logged-in customers (`{% if customer %}`) and send everything else to `routes.account_login_url`. Collect the answers across questions 1 to 4 in one `<form>` and send it once, when the shopper presses Continue on question 4.
+Open the popup only for a signed-in customer. In the HOKA India theme that is the `hoka:notify-me:subscribed` event, whose `detail.customerId` comes from `window.HokaLogin` (KwikPass). Collect the answers across questions 1 to 4 in one `<form>` and send it once, when the shopper presses Continue on question 4.
 
 ### Request
 
-`POST /apps/early-access` with the popup's `<form>` as `FormData`:
+`POST https://<deployment>/api/early-access` from a page on a `SHOPIFY_STOREFRONT_ORIGIN` origin, with the popup's `<form>` as `FormData` plus the customer ID:
 
 | Field | Required | Value |
 | --- | --- | --- |
+| `customerId` | yes | The signed-in customer's numeric Shopify ID, the same value Notify Me sends |
 | `weekly_distance` | yes | one answer handle |
 | `surfaces` | yes | one or more answer handles, one field per checked box |
 | `goal` | yes | one answer handle |
@@ -190,15 +188,17 @@ Answer handles for the options in the Figma screens. The API accepts any valid h
 | | `shoe_size` | 5 to 12 in half sizes | `5`, `5.5` ... `12` |
 
 ```js
-const response = await fetch('/apps/early-access', {
+const data = new FormData(form);
+data.set('customerId', customerId);
+const response = await fetch('https://<deployment>/api/early-access', {
   method: 'POST',
-  body: new FormData(form),
+  body: data,
   headers: { Accept: 'application/json' },
 });
 const result = await response.json().catch(() => null);
 ```
 
-Wrap the call in `try`/`catch` and show an error state on network failure. Show the pass screen only after a `200`.
+Do not set `Content-Type` yourself; the browser adds the multipart boundary. Wrap the call in `try`/`catch` and show an error state on network failure. Show the pass screen only after a `200`.
 
 ### Responses
 
@@ -206,9 +206,8 @@ Wrap the call in `try`/`catch` and show an error state on network failure. Show 
 | --- | --- | --- |
 | `200` | `{ ok: true, passNumber, submittedAt, answers, screenshotSaved }` | The pass screen |
 | `400` | `{ ok: false, code: 'invalid_answers', fields: { goal: 'required' } }` | The error next to each field in `fields` |
-| `401` | `{ ok: false, code: 'not_logged_in' }` | The sign-in prompt |
-| `401` | `{ ok: false }` without a code | A generic error. The request did not come through the store. |
-| `403` | `{ ok: false }` | A generic error. The browser sent an `Origin` that is not in `SHOPIFY_STOREFRONT_ORIGIN`. |
+| `401` | `{ ok: false, code: 'not_logged_in' }` | The sign-in prompt. `customerId` was missing, malformed, or not a customer of the store. |
+| `403` | `{ ok: false }`, no CORS headers | Nothing readable: the browser blocks the response. The page's origin is not in `SHOPIFY_STOREFRONT_ORIGIN`. |
 | `413` | `{ ok: false, code: 'too_large' }` | The file-size error |
 | `502`, `503` | `{ ok: false }` | A generic "try again" error |
 
@@ -236,10 +235,9 @@ If it is, turn on Storefronts access for `Early Access submission` in Settings >
 
 ## Security
 
-- The only write endpoint accepts requests signed by the Shopify app proxy (HMAC-SHA256 with the app secret, compared in constant time), from the configured shop, at most 5 minutes old.
-- A request whose browser `Origin` header is not the storefront (`SHOPIFY_STOREFRONT_ORIGIN` or the myshopify.com origin) is refused, as a guard against other sites posting on a signed-in shopper's behalf. A request with no `Origin` header is allowed, because the app proxy may not forward it.
-- The customer comes from the signed `logged_in_customer_id`. The request body cannot choose which customer gets written or which entry gets updated: the entry handle is built from the signed ID. A request that carries the parameter twice is refused.
-- The app proxy signature covers the query string, not the body, and has no nonce. A signed URL captured from a log could be replayed with a different body for that same customer within the 5-minute window. Keep query strings out of shared logs.
+- **The API trusts the `customerId` the browser sends.** That is the same trust model as the Notify Me call to the commerce backend: KwikPass gives the theme a customer ID but no token the API can verify. Anyone who knows or guesses a customer's numeric ID can therefore send answers, and a screenshot, in that customer's name and replace what the customer submitted. Accept this only because the data is low value: quiz answers, never personal details. If KwikPass can issue a verifiable session token, or customers move to Shopify customer accounts (where an app proxy signs `logged_in_customer_id`), switch to that.
+- What limits it: the browser `Origin` must be in `SHOPIFY_STOREFRONT_ORIGIN` or be the myshopify.com origin, so other websites cannot post from a shopper's browser, and a request with no `Origin` is refused. A script outside a browser can still fake the header. The ID must be a real customer of the store, checked with the Admin API before anything is uploaded or written, so random IDs create no entries or files.
+- The request cannot choose which entry gets updated: the entry handle is built from the customer ID.
 - Screenshot uploads are limited to PNG and JPG up to 2 MB, checked by file signature.
 - Metaobject entries are not readable from the storefront (storefront access `NONE`).
 - Errors returned to the browser are short and generic. Shopify responses and stack traces go to the Vercel function logs only.
@@ -256,9 +254,10 @@ Node 24 on Vercel (`engines` in `package.json`). No runtime dependencies. Handle
 
 | File | Responsibility |
 | --- | --- |
-| `api/early-access.js` | Proxy check, input parsing, response codes |
-| `lib/early-access.js` | Reading and validating the form |
-| `lib/early-access-store.js` | Metaobject and metafield schema, entry upsert, customer link |
+| `worker.js` | Cloudflare Workers entry: copies bindings into `process.env` and routes paths to the `api/` handlers |
+| `api/early-access.js` | Origin and CORS check, input parsing, response codes |
+| `lib/early-access.js` | Reading and validating the form and the customer ID |
+| `lib/early-access-store.js` | Metaobject and metafield schema, customer lookup, entry upsert, customer link |
 | `lib/files.js` | Screenshot upload to Shopify Files |
 | `scripts/create-definitions.js` | One-time metaobject and metafield definitions |
 
@@ -277,9 +276,8 @@ Node 24 on Vercel (`engines` in `package.json`). No runtime dependencies. Handle
 
 Not confirmed against a live store yet:
 
-1. A multipart upload reaches the function through the app proxy. Shopify documents that the proxy forwards POST bodies, but community reports about file uploads through it are mixed.
+1. The theme's Early Access API endpoint setting holds the worker URL, not `/apps/early-access`, and a submission from the Coming Soon page answers `200`.
 2. `metaobjectUpsert` accepts the `file_reference` straight after `fileCreate`, while the file is still processing. If it does not, the API needs to wait for `fileStatus: READY` first.
 3. On an existing entry, `metaobjectUpsert` without `run_screenshot` keeps the previous screenshot rather than clearing it.
 4. The customer page in admin shows the pinned `Early Access submission` metafield linking to the entry.
-5. A request to `/apps/early-access?logged_in_customer_id=123` from a logged-in browser is refused (Shopify should add its own value, which the duplicate check rejects).
-6. Whether the app proxy forwards the browser's `Origin` header unchanged. If it rewrites it to another value, legitimate submissions get `403`: check the function logs for `unexpected origin` on the first test and add that value to `SHOPIFY_STOREFRONT_ORIGIN`.
+5. If a submission gets `403`, the worker logs show `unexpected origin <value>`. Add that value to `SHOPIFY_STOREFRONT_ORIGIN`.

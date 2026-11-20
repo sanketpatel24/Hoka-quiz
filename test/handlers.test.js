@@ -7,12 +7,12 @@ import configTest from '../api/test.js';
 import { clearTokenCache } from '../lib/shopify.js';
 import {
   API_SECRET,
+  API_URL,
   CUSTOMER_ID,
   ENTRY_ID,
   STORE_DOMAIN,
   STOREFRONT_ORIGIN,
   clearEnv,
-  proxyUrl,
   setEnv,
   stubShopify,
   validForm,
@@ -31,7 +31,10 @@ afterEach(() => {
   clearEnv();
 });
 
-const post = (url, body, headers = {}) => earlyAccess.fetch(new Request(url, { method: 'POST', body, headers }));
+const FROM_STOREFRONT = { Origin: STOREFRONT_ORIGIN };
+
+const post = (body, headers = FROM_STOREFRONT) =>
+  earlyAccess.fetch(new Request(API_URL, { method: 'POST', body, headers }));
 
 const graphqlCall = (name) => shopify.graphqlBodies().find(({ query }) => query.includes(name));
 
@@ -39,7 +42,7 @@ const upsertFieldsByKey = () =>
   Object.fromEntries(graphqlCall('metaobjectUpsert').variables.metaobject.fields.map(({ key, value }) => [key, value]));
 
 test('creates the submission entry with every answer and links it to the customer', async () => {
-  const response = await post(proxyUrl(), validForm());
+  const response = await post(validForm());
   const body = await response.json();
 
   assert.equal(response.status, 200);
@@ -75,16 +78,20 @@ test('creates the submission entry with every answer and links it to the custome
   assert.equal(upload.init.body.get('file').size, 12);
 });
 
-test('creates the entry before linking it to the customer', async () => {
-  await post(proxyUrl(), validForm({ withScreenshot: false }));
-  const order = shopify.graphqlBodies().map(({ query }) =>
-    query.includes('metaobjectUpsert') ? 'upsert' : query.includes('metafieldsSet') ? 'link' : 'other',
-  );
-  assert.deepEqual(order, ['upsert', 'link']);
+test('confirms the customer, then creates the entry, then links it', async () => {
+  await post(validForm({ withScreenshot: false }));
+  const order = shopify.graphqlBodies().map(({ query }) => {
+    if (query.includes('customer(id:')) return 'customer';
+    if (query.includes('metaobjectUpsert')) return 'upsert';
+    if (query.includes('metafieldsSet')) return 'link';
+    return 'other';
+  });
+  assert.deepEqual(order, ['customer', 'upsert', 'link']);
+  assert.equal(graphqlCall('customer(id:').variables.id, `gid://shopify/Customer/${CUSTOMER_ID}`);
 });
 
 test('leaves the previous screenshot in place when no new one is sent', async () => {
-  const response = await post(proxyUrl(), validForm({ withScreenshot: false }));
+  const response = await post(validForm({ withScreenshot: false }));
   const body = await response.json();
 
   assert.equal(response.status, 200);
@@ -110,7 +117,7 @@ test('answers 502 and does not link the customer when the entry is rejected', as
     return stubbed(url, init);
   };
 
-  const response = await post(proxyUrl(), validForm({ withScreenshot: false }));
+  const response = await post(validForm({ withScreenshot: false }));
   const body = await response.json();
 
   assert.equal(response.status, 502);
@@ -122,7 +129,7 @@ test('writes to the metaobject type and customer metafield named in the environm
   process.env.EARLY_ACCESS_METAOBJECT_TYPE = 'quiz_entry';
   process.env.EARLY_ACCESS_CUSTOMER_METAFIELD = 'custom.quiz_entry';
 
-  const response = await post(proxyUrl(), validForm({ withScreenshot: false }));
+  const response = await post(validForm({ withScreenshot: false }));
   assert.equal(response.status, 200);
   assert.equal(graphqlCall('metaobjectUpsert').variables.handle.type, 'quiz_entry');
 
@@ -133,59 +140,95 @@ test('writes to the metaobject type and customer metafield named in the environm
 
 test('answers 503 without calling Shopify when the metaobject type is not configured', async () => {
   delete process.env.EARLY_ACCESS_METAOBJECT_TYPE;
-  const response = await post(proxyUrl(), validForm());
+  const response = await post(validForm());
   assert.equal(response.status, 503);
   assert.equal(shopify.calls.length, 0);
 });
 
 test('answers 503 when the customer metafield is not namespace.key', async () => {
   process.env.EARLY_ACCESS_CUSTOMER_METAFIELD = 'submission';
-  const response = await post(proxyUrl(), validForm());
+  const response = await post(validForm());
   assert.equal(response.status, 503);
   assert.equal(shopify.calls.length, 0);
 });
 
-test('accepts requests from every configured storefront origin, the myshopify origin, and none', async () => {
-  for (const origin of [STOREFRONT_ORIGIN, 'https://early-access-test.example', `https://${STORE_DOMAIN}`, null]) {
-    const response = await post(proxyUrl(), validForm({ withScreenshot: false }), origin ? { Origin: origin } : {});
+test('answers 503 when the deployment is missing its secret', async () => {
+  delete process.env.SHOPIFY_API_SECRET;
+  const response = await post(validForm());
+  assert.equal(response.status, 503);
+  assert.equal(shopify.calls.length, 0);
+});
+
+test('accepts every configured storefront origin and the myshopify origin, and echoes it for CORS', async () => {
+  for (const origin of [STOREFRONT_ORIGIN, 'https://early-access-test.example', `https://${STORE_DOMAIN}`]) {
+    const response = await post(validForm({ withScreenshot: false }), { Origin: origin });
     assert.equal(response.status, 200, `origin ${origin}`);
+    assert.equal(response.headers.get('access-control-allow-origin'), origin);
+    assert.match(response.headers.get('vary'), /Origin/);
   }
 });
 
-test('refuses a request whose browser origin is another site', async () => {
-  const response = await post(proxyUrl(), validForm(), { Origin: 'https://attacker.example' });
-  assert.equal(response.status, 403);
+test('answers the CORS preflight for a storefront origin', async () => {
+  const response = await earlyAccess.fetch(
+    new Request(API_URL, {
+      method: 'OPTIONS',
+      headers: { ...FROM_STOREFRONT, 'Access-Control-Request-Method': 'POST' },
+    }),
+  );
+  assert.equal(response.status, 204);
+  assert.equal(response.headers.get('access-control-allow-origin'), STOREFRONT_ORIGIN);
+  assert.match(response.headers.get('access-control-allow-methods'), /POST/);
   assert.equal(shopify.calls.length, 0);
 });
 
-test('refuses requests that did not come through the app proxy', async () => {
-  const response = await post('https://metafields-api.test/api/early-access?logged_in_customer_id=1', validForm());
-  assert.equal(response.status, 401);
+test('refuses another site, and a request with no Origin, without CORS access', async () => {
+  for (const headers of [{ Origin: 'https://attacker.example' }, {}]) {
+    const response = await post(validForm(), headers);
+    assert.equal(response.status, 403);
+    assert.equal(response.headers.get('access-control-allow-origin'), null);
+  }
   assert.equal(shopify.calls.length, 0);
 });
 
-test('refuses signed requests from another shop', async () => {
-  const response = await post(proxyUrl({ shop: 'someone-else.myshopify.com' }), validForm());
-  assert.equal(response.status, 401);
+test('asks the shopper to sign in when the customer id is missing or malformed', async () => {
+  for (const customerId of [null, '', 'abc', '12x', '0', '-5', '1'.repeat(21)]) {
+    const form = validForm();
+    if (customerId === null) form.delete('customerId');
+    else form.set('customerId', customerId);
+
+    const response = await post(form);
+    const body = await response.json();
+    assert.equal(response.status, 401, `customerId ${customerId}`);
+    assert.equal(body.code, 'not_logged_in');
+  }
+  assert.equal(shopify.calls.length, 0);
 });
 
-test('asks a logged-out shopper to sign in', async () => {
-  const response = await post(proxyUrl({ customerId: '' }), validForm());
+test('asks the shopper to sign in and writes nothing when the customer does not exist', async () => {
+  shopify.restore();
+  shopify = stubShopify({ knownCustomer: false });
+
+  const response = await post(validForm());
   const body = await response.json();
+
   assert.equal(response.status, 401);
   assert.equal(body.code, 'not_logged_in');
-  assert.equal(shopify.calls.length, 0);
+  assert.equal(shopify.calls.some(({ url }) => url.startsWith('https://uploads.test')), false);
+  assert.equal(graphqlCall('stagedUploadsCreate'), undefined);
+  assert.equal(graphqlCall('metaobjectUpsert'), undefined);
+  assert.equal(graphqlCall('metafieldsSet'), undefined);
 });
 
 test('returns field errors for invalid answers without calling Shopify', async () => {
   const form = validForm();
   form.delete('goal');
-  const response = await post(proxyUrl(), form);
+  const response = await post(form);
   const body = await response.json();
 
   assert.equal(response.status, 400);
   assert.equal(body.code, 'invalid_answers');
   assert.deepEqual(body.fields, { goal: 'required' });
+  assert.equal(response.headers.get('access-control-allow-origin'), STOREFRONT_ORIGIN);
   assert.equal(shopify.calls.length, 0);
 });
 
@@ -193,23 +236,17 @@ test('answers 502 without leaking Shopify errors when the save fails', async () 
   shopify.restore();
   globalThis.fetch = async () => new Response('{"errors":"[API] Invalid API key or access token"}', { status: 401 });
 
-  const response = await post(proxyUrl(), validForm({ withScreenshot: false }));
+  const response = await post(validForm({ withScreenshot: false }));
   const body = await response.json();
 
   assert.equal(response.status, 502);
   assert.deepEqual(body, { ok: false, error: 'Could not save your answers' });
 });
 
-test('answers 503 when the deployment is missing its secret', async () => {
-  delete process.env.SHOPIFY_API_SECRET;
-  const response = await post(proxyUrl(), validForm());
-  assert.equal(response.status, 503);
-});
-
 test('answers 405 with an Allow header for the wrong method', async () => {
-  const response = await earlyAccess.fetch(new Request(proxyUrl()));
+  const response = await earlyAccess.fetch(new Request(API_URL, { headers: FROM_STOREFRONT }));
   assert.equal(response.status, 405);
-  assert.equal(response.headers.get('allow'), 'POST');
+  assert.equal(response.headers.get('allow'), 'POST, OPTIONS');
 });
 
 test('health answers 200 with every secret missing', async () => {

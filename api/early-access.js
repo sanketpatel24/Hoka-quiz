@@ -1,48 +1,23 @@
-import { verifyProxyRequest } from '../lib/app-proxy.js';
-import { MAX_REQUEST_BYTES, parseSubmission } from '../lib/early-access.js';
-import { saveSubmission } from '../lib/early-access-store.js';
-import {
-  readCustomerMetafield,
-  readEnv,
-  readMetaobjectType,
-  readStoreDomain,
-  readStorefrontOrigins,
-} from '../lib/env.js';
-import { fail, json, methodGate } from '../lib/http.js';
+import { MAX_REQUEST_BYTES, parseSubmission, readCustomerId } from '../lib/early-access.js';
+import { customerExists, saveSubmission } from '../lib/early-access-store.js';
+import { envStatus, readCustomerMetafield, readMetaobjectType, readStorefrontOrigins } from '../lib/env.js';
+import { fail, json, methodGate, withStorefrontCors } from '../lib/http.js';
+
+const SIGN_IN_MESSAGE = 'Sign in to join Early Access';
 
 function readConfig() {
+  const problems = envStatus().filter(({ status }) => status !== 'set');
+  if (problems.length) {
+    throw new Error(problems.map(({ name, status }) => `${name} ${status}`).join(', '));
+  }
+
   return {
-    secret: readEnv('SHOPIFY_API_SECRET'),
-    storeDomain: readStoreDomain(),
     storefrontOrigins: readStorefrontOrigins(),
     target: { metaobjectType: readMetaobjectType(), customerMetafield: readCustomerMetafield() },
   };
 }
 
-function isForeignOrigin(request, allowedOrigins) {
-  const origin = request.headers.get('origin');
-  return Boolean(origin) && !allowedOrigins.has(origin);
-}
-
-async function handle(request) {
-  const blocked = methodGate(request, ['POST']);
-  if (blocked) return blocked;
-
-  let config;
-  try {
-    config = readConfig();
-  } catch (error) {
-    return fail(503, 'Service not configured', error.message);
-  }
-
-  const proxy = verifyProxyRequest(request.url, config.secret);
-  if (!proxy.valid) return fail(401, 'Request must come through the store', proxy.reason);
-  if (proxy.shop !== config.storeDomain) return fail(401, 'Request must come through the store', `unexpected shop ${proxy.shop}`);
-  if (isForeignOrigin(request, config.storefrontOrigins)) {
-    return fail(403, 'Request must come from the store', `unexpected origin ${request.headers.get('origin')}`);
-  }
-  if (!proxy.customerId) return fail(401, 'Sign in to join Early Access', null, { code: 'not_logged_in' });
-
+async function submit(request, target) {
   const contentLength = Number(request.headers.get('content-length') ?? 0);
   if (contentLength > MAX_REQUEST_BYTES) return fail(413, 'Upload is too large', null, { code: 'too_large' });
 
@@ -52,6 +27,9 @@ async function handle(request) {
   } catch (error) {
     return fail(400, 'Send the answers as form data', error.message);
   }
+
+  const customerId = readCustomerId(formData);
+  if (!customerId) return fail(401, SIGN_IN_MESSAGE, null, { code: 'not_logged_in' });
 
   let submission;
   try {
@@ -64,11 +42,35 @@ async function handle(request) {
   if (errors) return fail(400, 'Some answers need attention', null, { code: 'invalid_answers', fields: errors });
 
   try {
-    const result = await saveSubmission({ customerId: proxy.customerId, answers, screenshot, target: config.target });
+    if (!(await customerExists(customerId))) {
+      return fail(401, SIGN_IN_MESSAGE, `unknown customer ${customerId}`, { code: 'not_logged_in' });
+    }
+    const result = await saveSubmission({ customerId, answers, screenshot, target });
     return json(200, { ok: true, ...result });
   } catch (error) {
     return fail(502, 'Could not save your answers', error.userErrors ?? error);
   }
+}
+
+async function handle(request) {
+  const blocked = methodGate(request, ['POST', 'OPTIONS']);
+  if (blocked) return blocked;
+
+  let config;
+  try {
+    config = readConfig();
+  } catch (error) {
+    return fail(503, 'Service not configured', error.message);
+  }
+
+  const origin = request.headers.get('origin');
+  if (!origin || !config.storefrontOrigins.has(origin)) {
+    return fail(403, 'Request must come from the store', `unexpected origin ${origin ?? '(none)'}`);
+  }
+
+  const response =
+    request.method === 'OPTIONS' ? new Response(null, { status: 204 }) : await submit(request, config.target);
+  return withStorefrontCors(response, origin);
 }
 
 export default { fetch: handle };

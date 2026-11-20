@@ -1,11 +1,10 @@
-import { signProxyParams } from '../lib/app-proxy.js';
-
 export const STORE_DOMAIN = 'early-access-test.myshopify.com';
 export const API_SECRET = 'test-secret-value-never-rendered';
 export const API_KEY = 'test-client-id';
 export const CUSTOMER_ID = '7712345678901';
 export const ENTRY_ID = 'gid://shopify/Metaobject/777';
 export const STOREFRONT_ORIGIN = 'https://www.early-access-test.example';
+export const API_URL = 'https://metafields-api.test/api/early-access';
 
 const TEST_ENV = {
   SHOPIFY_STORE_DOMAIN: STORE_DOMAIN,
@@ -26,24 +25,9 @@ export function clearEnv() {
   for (const name of Object.keys(TEST_ENV)) delete process.env[name];
 }
 
-export function proxyUrl({
-  customerId = CUSTOMER_ID,
-  shop = STORE_DOMAIN,
-  timestamp = Math.floor(Date.now() / 1000),
-  secret = API_SECRET,
-} = {}) {
-  const params = new URLSearchParams({
-    shop,
-    logged_in_customer_id: customerId,
-    path_prefix: '/apps/early-access',
-    timestamp: String(timestamp),
-  });
-  params.set('signature', signProxyParams(params, secret));
-  return `https://metafields-api.test/api/early-access?${params}`;
-}
-
 export function validForm({ withScreenshot = true } = {}) {
   const form = new FormData();
+  form.set('customerId', CUSTOMER_ID);
   form.set('weekly_distance', '10-25-km');
   form.append('surfaces', 'road');
   form.append('surfaces', 'trail');
@@ -56,7 +40,7 @@ export function validForm({ withScreenshot = true } = {}) {
   return form;
 }
 
-export function stubShopify() {
+export function stubShopify({ knownCustomer = true } = {}) {
   const calls = [];
   const original = globalThis.fetch;
 
@@ -71,7 +55,10 @@ export function stubShopify() {
     if (target === 'https://uploads.test/upload') return new Response(null, { status: 204 });
 
     if (target.endsWith('/graphql.json')) {
-      const { query } = JSON.parse(init.body);
+      const { query, variables } = JSON.parse(init.body);
+      if (query.includes('customer(id:')) {
+        return Response.json({ data: { customer: knownCustomer ? { id: variables.id } : null } });
+      }
       if (query.includes('stagedUploadsCreate')) {
         return Response.json({
           data: {

@@ -7,9 +7,9 @@ const ENDPOINTS = [
   {
     method: 'POST',
     path: '/api/early-access',
-    auth: 'SHOPIFY_API_SECRET',
+    auth: 'SHOPIFY_STOREFRONT_ORIGIN',
     description:
-      "Called when the shopper presses Continue on question 4. Creates or updates the logged-in customer's entry of the EARLY_ACCESS_METAOBJECT_TYPE metaobject with all four answers and the optional run screenshot, then links it from the EARLY_ACCESS_CUSTOMER_METAFIELD customer metafield. Only reachable through the store app proxy at /apps/early-access, which signs the request and names the customer.",
+      "Called from the storefront popup when the shopper presses Continue on question 4, with the signed-in customer's customerId and the answers as form data. Creates or updates that customer's entry of the EARLY_ACCESS_METAOBJECT_TYPE metaobject with all four answers and the optional run screenshot, then links it from the EARLY_ACCESS_CUSTOMER_METAFIELD customer metafield. Only browsers on a SHOPIFY_STOREFRONT_ORIGIN origin may call it.",
   },
   {
     method: 'GET',
@@ -91,7 +91,7 @@ function renderPage() {
 <body>
 <main>
   <h1>${escape(SERVICE_NAME)}</h1>
-  <p class="lede">Service is running. There is no UI here. The storefront Early Access popup posts to the store app proxy, which forwards signed requests to the endpoint below.</p>
+  <p class="lede">Service is running. There is no UI here. The storefront Early Access popup posts its answers straight to the endpoint below, the same way the Notify Me button calls the commerce backend.</p>
 
   <h2>Endpoints</h2>
   <table>${ENDPOINTS.map(endpointRow).join('')}</table>

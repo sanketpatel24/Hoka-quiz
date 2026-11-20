@@ -2,13 +2,13 @@
   "name": "metafields-api",
   "private": true,
   "type": "module",
-  "description": "Saves the Early Access quiz answers of a logged-in customer as a metaobject entry linked from a customer metafield, called from the storefront through a Shopify app proxy.",
+  "description": "Saves the Early Access quiz answers of a signed-in customer as a metaobject entry linked from a customer metafield, called from the storefront popup.",
   "engines": {
     "node": "24.x"
   },
   "scripts": {
     "test": "node --test test/*.test.js",
-    "check": "node --check api/*.js lib/*.js scripts/*.js",
+    "check": "node --check worker.js api/*.js lib/*.js scripts/*.js",
     "definitions": "node --env-file=.env.local scripts/create-definitions.js"
   }
 }
