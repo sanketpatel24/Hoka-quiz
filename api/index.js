@@ -9,7 +9,7 @@ const ENDPOINTS = [
     path: '/api/early-access',
     auth: 'SHOPIFY_STOREFRONT_ORIGIN',
     description:
-      "Called from the storefront popup when the shopper presses Continue on question 3, with the signed-in customer's customerId and the answers as form data. Creates or updates that customer's entry of the EARLY_ACCESS_METAOBJECT_TYPE metaobject with a random ticket number (kept on later submissions), the kilometres run this year, the optional screenshot of that total, the running surfaces and the running goal, then links it from the EARLY_ACCESS_CUSTOMER_METAFIELD customer metafield and returns the ticket number. Only browsers on a SHOPIFY_STOREFRONT_ORIGIN origin may call it.",
+      "Called from the storefront popup when the shopper presses Continue on question 3, with the signed-in customer's customerId and the answers as form data. Creates or updates that customer's entry of the EARLY_ACCESS_METAOBJECT_TYPE metaobject with a ticket number built from the customer (first letter of the first name, IN-, last five digits of the customer ID, such as AIN-78901), the kilometres run this year, the optional screenshot of that total, the running surfaces and the running goal, then links it from the EARLY_ACCESS_CUSTOMER_METAFIELD customer metafield and returns the ticket number. Only browsers on a SHOPIFY_STOREFRONT_ORIGIN origin may call it.",
   },
   {
     method: 'GET',

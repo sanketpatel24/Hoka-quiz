@@ -42,7 +42,7 @@ async function submit(request, target) {
   if (errors) return fail(400, 'Some answers need attention', null, { code: 'invalid_answers', fields: errors });
 
   try {
-    const customer = await findCustomer(customerId, target.metaobjectType);
+    const customer = await findCustomer(customerId);
     if (!customer) {
       return fail(401, SIGN_IN_MESSAGE, `unknown customer ${customerId}`, { code: 'not_logged_in' });
     }

@@ -36,9 +36,10 @@ export function validForm({ withScreenshot = true } = {}) {
   return form;
 }
 
-export const EXISTING_TICKET = 'IN-48213';
+export const CUSTOMER_NAME = { firstName: 'Asha', lastName: 'Rao' };
+export const CUSTOMER_TICKET = 'AIN-78901';
 
-export function stubShopify({ knownCustomer = true, existingTicket = null } = {}) {
+export function stubShopify({ knownCustomer = true, customerName = CUSTOMER_NAME } = {}) {
   const calls = [];
   const original = globalThis.fetch;
 
@@ -52,14 +53,8 @@ export function stubShopify({ knownCustomer = true, existingTicket = null } = {}
       const { query, variables } = JSON.parse(init.body);
       if (query.includes('customer(id:')) {
         return Response.json({
-          data: {
-            customer: knownCustomer ? { id: variables.id } : null,
-            metaobjectByHandle: existingTicket ? { ticketNumber: { value: existingTicket } } : null,
-          },
+          data: { customer: knownCustomer ? { id: variables.id, ...customerName } : null },
         });
-      }
-      if (query.includes('metaobjects(type:')) {
-        return Response.json({ data: { metaobjects: { nodes: [] } } });
       }
       if (query.includes('stagedUploadsCreate')) {
         return Response.json({

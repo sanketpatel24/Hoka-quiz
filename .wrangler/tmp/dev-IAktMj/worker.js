@@ -292,38 +292,19 @@ __name(uploadImage, "uploadImage");
 // lib/ticket-number.js
 var TICKET_PREFIX = "IN-";
 var TICKET_DIGITS = 5;
-var TICKET_NUMBER_REGEX = `^${TICKET_PREFIX}[0-9]{${TICKET_DIGITS}}$`;
-var TICKET_MIN = 10 ** (TICKET_DIGITS - 1);
-var TICKET_RANGE = 10 ** TICKET_DIGITS - TICKET_MIN;
-var MAX_ATTEMPTS = 5;
-var TICKET_LOOKUP = `
-  query EarlyAccessTicketLookup($type: String!, $query: String!) {
-    metaobjects(type: $type, first: 5, query: $query) {
-      nodes { ticketNumber: field(key: "ticket_number") { value } }
-    }
-  }
-`;
-function randomTicketNumber() {
-  const [value] = crypto.getRandomValues(new Uint32Array(1));
-  return `${TICKET_PREFIX}${TICKET_MIN + value % TICKET_RANGE}`;
+var TICKET_NUMBER_REGEX = `^[A-Z]?${TICKET_PREFIX}[0-9]{${TICKET_DIGITS}}$`;
+var INITIAL_PATTERN = /^[A-Z]$/;
+function initialOf(name) {
+  const initial = (name ?? "").trim().normalize("NFD").charAt(0).toUpperCase();
+  return INITIAL_PATTERN.test(initial) ? initial : "";
 }
-__name(randomTicketNumber, "randomTicketNumber");
-async function isTaken(metaobjectType, ticketNumber) {
-  const data = await adminGraphql(TICKET_LOOKUP, {
-    type: metaobjectType,
-    query: `display_name:"${ticketNumber}"`
-  });
-  return data.metaobjects.nodes.some((node) => node.ticketNumber?.value === ticketNumber);
+__name(initialOf, "initialOf");
+function ticketNumberFor({ customerId, firstName, lastName }) {
+  const initial = initialOf(firstName) || initialOf(lastName);
+  const digits = String(customerId).slice(-TICKET_DIGITS).padStart(TICKET_DIGITS, "0");
+  return `${initial}${TICKET_PREFIX}${digits}`;
 }
-__name(isTaken, "isTaken");
-async function issueTicketNumber(metaobjectType) {
-  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
-    const candidate = randomTicketNumber();
-    if (!await isTaken(metaobjectType, candidate)) return candidate;
-  }
-  throw new Error(`no free ticket number after ${MAX_ATTEMPTS} attempts`);
-}
-__name(issueTicketNumber, "issueTicketNumber");
+__name(ticketNumberFor, "ticketNumberFor");
 
 // lib/early-access-store.js
 var METAOBJECT_DEFINITION = {
@@ -335,7 +316,7 @@ var METAOBJECT_DEFINITION = {
     {
       key: "ticket_number",
       name: "Ticket number",
-      description: "Random Early Access ticket number shown on the confirmation ticket. Issued once per customer.",
+      description: "Early Access ticket number shown on the confirmation ticket: the first letter of the customer's first name, IN- and the last five digits of the customer ID.",
       type: "single_line_text_field",
       required: true,
       validations: [{ name: "regex", value: TICKET_NUMBER_REGEX }]
@@ -382,11 +363,8 @@ var CUSTOMER_METAFIELD = {
   description: "The customer's Early Access submission entry."
 };
 var CUSTOMER_LOOKUP = `
-  query EarlyAccessCustomer($id: ID!, $handle: MetaobjectHandleInput!) {
-    customer(id: $id) { id }
-    metaobjectByHandle(handle: $handle) {
-      ticketNumber: field(key: "ticket_number") { value }
-    }
+  query EarlyAccessCustomer($id: ID!) {
+    customer(id: $id) { id firstName lastName }
   }
 `;
 var METAOBJECT_UPSERT = `
@@ -413,13 +391,12 @@ function customerGid(customerId) {
   return `gid://shopify/Customer/${customerId}`;
 }
 __name(customerGid, "customerGid");
-async function findCustomer(customerId, metaobjectType) {
-  const data = await adminGraphql(CUSTOMER_LOOKUP, {
-    id: customerGid(customerId),
-    handle: { type: metaobjectType, handle: submissionHandleFor(customerId) }
-  });
-  if (!data.customer) return null;
-  return { ticketNumber: data.metaobjectByHandle?.ticketNumber?.value || null };
+async function findCustomer(customerId) {
+  const { customer } = await adminGraphql(CUSTOMER_LOOKUP, { id: customerGid(customerId) });
+  if (!customer) return null;
+  return {
+    ticketNumber: ticketNumberFor({ customerId, firstName: customer.firstName, lastName: customer.lastName })
+  };
 }
 __name(findCustomer, "findCustomer");
 async function upsertEntry(customerId, metaobjectType, values) {
@@ -450,9 +427,8 @@ async function linkToCustomer(customerId, { namespace, key }, entryId) {
 }
 __name(linkToCustomer, "linkToCustomer");
 async function saveSubmission({ customerId, ticketNumber, answers, screenshot, target }) {
-  const issuedTicketNumber = ticketNumber ?? await issueTicketNumber(target.metaobjectType);
   const values = {
-    ticket_number: issuedTicketNumber,
+    ticket_number: ticketNumber,
     yearly_distance_km: String(answers.yearly_distance_km),
     surfaces: JSON.stringify(answers.surfaces),
     goal: answers.goal
@@ -468,7 +444,7 @@ async function saveSubmission({ customerId, ticketNumber, answers, screenshot, t
   const entry = await upsertEntry(customerId, target.metaobjectType, values);
   await linkToCustomer(customerId, target.customerMetafield, entry.id);
   return {
-    ticketNumber: issuedTicketNumber,
+    ticketNumber,
     answers,
     screenshotSaved: Boolean(screenshot)
   };
@@ -563,7 +539,7 @@ async function submit(request, target) {
   const { answers, screenshot, errors } = submission;
   if (errors) return fail(400, "Some answers need attention", null, { code: "invalid_answers", fields: errors });
   try {
-    const customer = await findCustomer(customerId, target.metaobjectType);
+    const customer = await findCustomer(customerId);
     if (!customer) {
       return fail(401, SIGN_IN_MESSAGE, `unknown customer ${customerId}`, { code: "not_logged_in" });
     }
@@ -654,7 +630,7 @@ var ENDPOINTS = [
     method: "POST",
     path: "/api/early-access",
     auth: "SHOPIFY_STOREFRONT_ORIGIN",
-    description: "Called from the storefront popup when the shopper presses Continue on question 3, with the signed-in customer's customerId and the answers as form data. Creates or updates that customer's entry of the EARLY_ACCESS_METAOBJECT_TYPE metaobject with a random ticket number (kept on later submissions), the kilometres run this year, the optional screenshot of that total, the running surfaces and the running goal, then links it from the EARLY_ACCESS_CUSTOMER_METAFIELD customer metafield and returns the ticket number. Only browsers on a SHOPIFY_STOREFRONT_ORIGIN origin may call it."
+    description: "Called from the storefront popup when the shopper presses Continue on question 3, with the signed-in customer's customerId and the answers as form data. Creates or updates that customer's entry of the EARLY_ACCESS_METAOBJECT_TYPE metaobject with a ticket number built from the customer (first letter of the first name, IN-, last five digits of the customer ID, such as AIN-78901), the kilometres run this year, the optional screenshot of that total, the running surfaces and the running goal, then links it from the EARLY_ACCESS_CUSTOMER_METAFIELD customer metafield and returns the ticket number. Only browsers on a SHOPIFY_STOREFRONT_ORIGIN origin may call it."
   },
   {
     method: "GET",

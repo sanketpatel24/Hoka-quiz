@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { MAX_SCREENSHOT_BYTES, MAX_YEARLY_DISTANCE_KM, parseSubmission } from '../lib/early-access.js';
-import { TICKET_NUMBER_REGEX, randomTicketNumber } from '../lib/ticket-number.js';
+import { TICKET_NUMBER_REGEX, ticketNumberFor } from '../lib/ticket-number.js';
 import { PNG_BYTES, validForm } from './helpers.js';
 
 test('parses a complete submission', async () => {
@@ -99,7 +99,22 @@ test('rejects a screenshot over 2 MB', async () => {
   assert.deepEqual(errors, { yearly_distance_screenshot: 'too_large' });
 });
 
-test('draws ticket numbers shaped like IN-39561', () => {
+test('builds the ticket from the first letter of the first name and the last five digits of the customer ID', () => {
   const pattern = new RegExp(TICKET_NUMBER_REGEX);
-  for (let draw = 0; draw < 200; draw += 1) assert.match(randomTicketNumber(), pattern);
+  const cases = [
+    [{ customerId: '7712345678901', firstName: 'Asha', lastName: 'Rao' }, 'AIN-78901'],
+    [{ customerId: '7712345678901', firstName: '  riya ', lastName: 'Shah' }, 'RIN-78901'],
+    [{ customerId: '7712345678901', firstName: 'Élodie', lastName: null }, 'EIN-78901'],
+    [{ customerId: '7712345678901', firstName: '李', lastName: 'Wong' }, 'WIN-78901'],
+    [{ customerId: '7712345678901', firstName: null, lastName: undefined }, 'IN-78901'],
+    [{ customerId: '42', firstName: 'Dev', lastName: null }, 'DIN-00042'],
+  ];
+  for (const [customer, expected] of cases) {
+    assert.equal(ticketNumberFor(customer), expected);
+    assert.match(expected, pattern);
+  }
+});
+
+test('accepts tickets issued in the earlier random format', () => {
+  assert.match('IN-48213', new RegExp(TICKET_NUMBER_REGEX));
 });
