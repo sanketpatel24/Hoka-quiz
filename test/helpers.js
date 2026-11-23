@@ -26,19 +26,19 @@ export function clearEnv() {
 export function validForm({ withScreenshot = true } = {}) {
   const form = new FormData();
   form.set('customerId', CUSTOMER_ID);
-  form.set('weekly_distance', '10-25-km');
+  form.set('yearly_distance_km', '850.5');
   form.append('surfaces', 'road');
   form.append('surfaces', 'trail');
   form.set('goal', 'half-marathon');
-  form.set('shoe_fit', 'mens');
-  form.set('shoe_size', '9');
   if (withScreenshot) {
-    form.set('run_screenshot', new File([PNG_BYTES], 'my run.png', { type: 'image/png' }));
+    form.set('yearly_distance_screenshot', new File([PNG_BYTES], 'my year.png', { type: 'image/png' }));
   }
   return form;
 }
 
-export function stubShopify({ knownCustomer = true } = {}) {
+export const EXISTING_TICKET = 'IN-48213';
+
+export function stubShopify({ knownCustomer = true, existingTicket = null } = {}) {
   const calls = [];
   const original = globalThis.fetch;
 
@@ -51,7 +51,15 @@ export function stubShopify({ knownCustomer = true } = {}) {
     if (target.endsWith('/graphql.json')) {
       const { query, variables } = JSON.parse(init.body);
       if (query.includes('customer(id:')) {
-        return Response.json({ data: { customer: knownCustomer ? { id: variables.id } : null } });
+        return Response.json({
+          data: {
+            customer: knownCustomer ? { id: variables.id } : null,
+            metaobjectByHandle: existingTicket ? { ticketNumber: { value: existingTicket } } : null,
+          },
+        });
+      }
+      if (query.includes('metaobjects(type:')) {
+        return Response.json({ data: { metaobjects: { nodes: [] } } });
       }
       if (query.includes('stagedUploadsCreate')) {
         return Response.json({

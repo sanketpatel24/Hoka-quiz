@@ -9,6 +9,7 @@ import {
   API_URL,
   CUSTOMER_ID,
   ENTRY_ID,
+  EXISTING_TICKET,
   STORE_DOMAIN,
   STOREFRONT_ORIGIN,
   clearEnv,
@@ -39,26 +40,29 @@ const graphqlCall = (name) => shopify.graphqlBodies().find(({ query }) => query.
 const upsertFieldsByKey = () =>
   Object.fromEntries(graphqlCall('metaobjectUpsert').variables.metaobject.fields.map(({ key, value }) => [key, value]));
 
-test('creates the submission entry with every answer and links it to the customer', async () => {
+test('stores a new ticket number, the three answers and the screenshot, then links the entry', async () => {
   const response = await post(validForm());
   const body = await response.json();
 
   assert.equal(response.status, 200);
-  assert.equal(body.ok, true);
-  assert.equal(body.screenshotSaved, true);
-  assert.deepEqual(body.answers.surfaces, ['road', 'trail']);
+  assert.match(body.ticketNumber, /^IN-\d{5}$/);
+  assert.deepEqual(body, {
+    ok: true,
+    ticketNumber: body.ticketNumber,
+    answers: { yearly_distance_km: 850.5, surfaces: ['road', 'trail'], goal: 'half-marathon' },
+    screenshotSaved: true,
+  });
+
+  assert.equal(graphqlCall('metaobjects(type:').variables.query, `display_name:"${body.ticketNumber}"`);
 
   const upsert = graphqlCall('metaobjectUpsert');
   assert.deepEqual(upsert.variables.handle, { type: 'early_access_submission', handle: `customer-${CUSTOMER_ID}` });
   assert.deepEqual(upsertFieldsByKey(), {
-    pass_number: body.passNumber,
-    weekly_distance: '10-25-km',
+    ticket_number: body.ticketNumber,
+    yearly_distance_km: '850.5',
     surfaces: '["road","trail"]',
     goal: 'half-marathon',
-    shoe_fit: 'mens',
-    shoe_size: '9',
-    submitted_at: body.submittedAt,
-    run_screenshot: 'gid://shopify/MediaImage/555',
+    yearly_distance_screenshot: 'gid://shopify/MediaImage/555',
   });
 
   assert.deepEqual(graphqlCall('metafieldsSet').variables.metafields, [
@@ -76,16 +80,33 @@ test('creates the submission entry with every answer and links it to the custome
   assert.equal(upload.init.body.get('file').size, 12);
 });
 
-test('confirms the customer, then creates the entry, then links it', async () => {
+test('confirms the customer, then issues a ticket, then creates the entry, then links it', async () => {
   await post(validForm({ withScreenshot: false }));
   const order = shopify.graphqlBodies().map(({ query }) => {
     if (query.includes('customer(id:')) return 'customer';
+    if (query.includes('metaobjects(type:')) return 'ticket';
     if (query.includes('metaobjectUpsert')) return 'upsert';
     if (query.includes('metafieldsSet')) return 'link';
     return 'other';
   });
-  assert.deepEqual(order, ['customer', 'upsert', 'link']);
-  assert.equal(graphqlCall('customer(id:').variables.id, `gid://shopify/Customer/${CUSTOMER_ID}`);
+  assert.deepEqual(order, ['customer', 'ticket', 'upsert', 'link']);
+  assert.deepEqual(graphqlCall('customer(id:').variables, {
+    id: `gid://shopify/Customer/${CUSTOMER_ID}`,
+    handle: { type: 'early_access_submission', handle: `customer-${CUSTOMER_ID}` },
+  });
+});
+
+test('keeps the ticket number a customer already has when they answer again', async () => {
+  shopify.restore();
+  shopify = stubShopify({ existingTicket: EXISTING_TICKET });
+
+  const response = await post(validForm({ withScreenshot: false }));
+  const body = await response.json();
+
+  assert.equal(response.status, 200);
+  assert.equal(body.ticketNumber, EXISTING_TICKET);
+  assert.equal(upsertFieldsByKey().ticket_number, EXISTING_TICKET);
+  assert.equal(graphqlCall('metaobjects(type:'), undefined);
 });
 
 test('leaves the previous screenshot in place when no new one is sent', async () => {
@@ -95,7 +116,7 @@ test('leaves the previous screenshot in place when no new one is sent', async ()
   assert.equal(response.status, 200);
   assert.equal(body.screenshotSaved, false);
   assert.equal(shopify.calls.some(({ url }) => url.startsWith('https://uploads.test')), false);
-  assert.equal(Object.hasOwn(upsertFieldsByKey(), 'run_screenshot'), false);
+  assert.equal(Object.hasOwn(upsertFieldsByKey(), 'yearly_distance_screenshot'), false);
 });
 
 test('answers 502 and does not link the customer when the entry is rejected', async () => {

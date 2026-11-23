@@ -1,5 +1,5 @@
 import { MAX_REQUEST_BYTES, parseSubmission, readCustomerId } from '../lib/early-access.js';
-import { customerExists, saveSubmission } from '../lib/early-access-store.js';
+import { findCustomer, saveSubmission } from '../lib/early-access-store.js';
 import { envStatus, readCustomerMetafield, readMetaobjectType, readStorefrontOrigins } from '../lib/env.js';
 import { fail, json, methodGate, withStorefrontCors } from '../lib/http.js';
 
@@ -42,10 +42,11 @@ async function submit(request, target) {
   if (errors) return fail(400, 'Some answers need attention', null, { code: 'invalid_answers', fields: errors });
 
   try {
-    if (!(await customerExists(customerId))) {
+    const customer = await findCustomer(customerId, target.metaobjectType);
+    if (!customer) {
       return fail(401, SIGN_IN_MESSAGE, `unknown customer ${customerId}`, { code: 'not_logged_in' });
     }
-    const result = await saveSubmission({ customerId, answers, screenshot, target });
+    const result = await saveSubmission({ customerId, ticketNumber: customer.ticketNumber, answers, screenshot, target });
     return json(200, { ok: true, ...result });
   } catch (error) {
     return fail(502, 'Could not save your answers', error.userErrors ?? error);

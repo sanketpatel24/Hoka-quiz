@@ -1,16 +1,32 @@
+import { planDefinitionUpdate } from '../lib/definition-sync.js';
 import { CUSTOMER_METAFIELD, METAOBJECT_DEFINITION } from '../lib/early-access-store.js';
 import { readCustomerMetafield, readMetaobjectType } from '../lib/env.js';
 import { adminGraphql } from '../lib/shopify.js';
 
+const PRUNE_FLAG = '--prune';
+
 const METAOBJECT_DEFINITION_BY_TYPE = `
   query EarlyAccessMetaobjectDefinition($type: String!) {
-    metaobjectDefinitionByType(type: $type) { id }
+    metaobjectDefinitionByType(type: $type) {
+      id
+      displayNameKey
+      fieldDefinitions { key type { name } }
+    }
   }
 `;
 
 const METAOBJECT_DEFINITION_CREATE = `
   mutation EarlyAccessMetaobjectDefinitionCreate($definition: MetaobjectDefinitionCreateInput!) {
     metaobjectDefinitionCreate(definition: $definition) {
+      metaobjectDefinition { id }
+      userErrors { field message code }
+    }
+  }
+`;
+
+const METAOBJECT_DEFINITION_UPDATE = `
+  mutation EarlyAccessMetaobjectDefinitionUpdate($id: ID!, $definition: MetaobjectDefinitionUpdateInput!) {
+    metaobjectDefinitionUpdate(id: $id, definition: $definition) {
       metaobjectDefinition { id }
       userErrors { field message code }
     }
@@ -28,19 +44,28 @@ const METAFIELD_DEFINITION_CREATE = `
 
 const describeErrors = (userErrors) => userErrors.map(({ message }) => message).join('; ');
 
-async function ensureMetaobjectDefinition(type) {
-  const existing = await adminGraphql(METAOBJECT_DEFINITION_BY_TYPE, { type });
-  if (existing.metaobjectDefinitionByType) {
-    return {
-      id: existing.metaobjectDefinitionByType.id,
-      status: 'already exists - confirm in admin that its fields match the README registry',
-    };
-  }
-
+async function createMetaobjectDefinition(type) {
   const data = await adminGraphql(METAOBJECT_DEFINITION_CREATE, { definition: { type, ...METAOBJECT_DEFINITION } });
   const { metaobjectDefinition, userErrors } = data.metaobjectDefinitionCreate;
   if (!metaobjectDefinition) throw new Error(describeErrors(userErrors) || 'no definition returned');
-  return { id: metaobjectDefinition.id, status: 'created' };
+  return { id: metaobjectDefinition.id, report: ['created with every field'] };
+}
+
+async function updateMetaobjectDefinition(existing, prune) {
+  const { definition, report, conflicts } = planDefinitionUpdate(existing, METAOBJECT_DEFINITION, { prune });
+  if (conflicts.length) {
+    throw new Error(`fields with the wrong type, nothing changed: ${conflicts.join('; ')}. Delete them in admin, then run again`);
+  }
+
+  const data = await adminGraphql(METAOBJECT_DEFINITION_UPDATE, { id: existing.id, definition });
+  const { metaobjectDefinition, userErrors } = data.metaobjectDefinitionUpdate;
+  if (!metaobjectDefinition) throw new Error(describeErrors(userErrors) || 'no definition returned');
+  return { id: metaobjectDefinition.id, report };
+}
+
+async function syncMetaobjectDefinition(type, prune) {
+  const { metaobjectDefinitionByType: existing } = await adminGraphql(METAOBJECT_DEFINITION_BY_TYPE, { type });
+  return existing ? updateMetaobjectDefinition(existing, prune) : createMetaobjectDefinition(type);
 }
 
 async function ensureCustomerMetafieldDefinition({ namespace, key }, metaobjectType, metaobjectDefinitionId) {
@@ -67,6 +92,8 @@ async function ensureCustomerMetafieldDefinition({ namespace, key }, metaobjectT
 }
 
 async function run() {
+  const prune = process.argv.slice(2).includes(PRUNE_FLAG);
+
   let metaobjectType;
   let customerMetafield;
   try {
@@ -82,8 +109,8 @@ async function run() {
 
   let metaobjectDefinition;
   try {
-    metaobjectDefinition = await ensureMetaobjectDefinition(metaobjectType);
-    console.log(`${metaobjectLabel}: ${metaobjectDefinition.status}`);
+    metaobjectDefinition = await syncMetaobjectDefinition(metaobjectType, prune);
+    for (const line of metaobjectDefinition.report) console.log(`${metaobjectLabel}: ${line}`);
   } catch (error) {
     console.error(`${metaobjectLabel}: failed - ${error.message}`);
     console.error(`${metafieldLabel}: skipped - it needs the metaobject definition`);
